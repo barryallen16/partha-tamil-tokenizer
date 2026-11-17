@@ -69,19 +69,64 @@
     }
   }
 
-  function setupTheme() {
-    const saved = localStorage.getItem('theme');
-    if (saved) {
-      document.documentElement.setAttribute('data-theme', saved);
-    } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
-      document.documentElement.setAttribute('data-theme', 'light');
+  function updateThemeIcon(theme) {
+    const sunIcon = document.querySelector('.theme-icon-sun');
+    const moonIcon = document.querySelector('.theme-icon-moon');
+    if (sunIcon && moonIcon) {
+      if (theme === 'light') {
+        sunIcon.style.display = 'none';
+        moonIcon.style.display = 'inline-block';
+      } else {
+        sunIcon.style.display = 'inline-block';
+        moonIcon.style.display = 'none';
+      }
     }
   }
 
+  function applyColorScheme(theme) {
+    const meta = document.querySelector('meta[name="color-scheme"]');
+    if (meta) {
+      meta.content = theme || 'light dark';
+    }
+    if (theme) {
+      document.documentElement.setAttribute('data-theme', theme);
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+    updateThemeIcon(theme);
+  }
+
+  function setupTheme() {
+    const saved = localStorage.getItem('theme');
+    if (saved === 'light' || saved === 'dark') {
+      applyColorScheme(saved);
+    } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+      applyColorScheme('light');
+    } else {
+      applyColorScheme('dark');
+    }
+
+    if (window.matchMedia) {
+      window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
+        if (!localStorage.getItem('theme')) {
+          applyColorScheme(e.matches ? 'light' : 'dark');
+        }
+      });
+    }
+
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'theme') {
+        applyColorScheme(e.newValue);
+      }
+    });
+  }
+
   function toggleTheme() {
-    const current = document.documentElement.getAttribute('data-theme') || 'dark';
+    const current = document.documentElement.getAttribute('data-theme') || (
+      window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+    );
     const next = current === 'dark' ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', next);
+    applyColorScheme(next);
     localStorage.setItem('theme', next);
   }
 
@@ -136,6 +181,15 @@
 
     themeToggle.addEventListener('click', toggleTheme);
 
+    // Popover close button
+    const popClose = document.getElementById('pop-close');
+    if (popClose) {
+      popClose.addEventListener('click', (e) => {
+        e.stopPropagation();
+        hidePopover();
+      });
+    }
+
     // Preset chips
     document.querySelectorAll('.preset-chips .chip').forEach(chip => {
       chip.addEventListener('click', () => {
@@ -146,9 +200,17 @@
       });
     });
 
-    // Hide popover when mouse leaves document
+    // Hide popover when mouse leaves document or when tapping outside
     document.addEventListener('mousemove', (e) => {
-      if (!e.target.closest('.token-span')) {
+      if (!e.target.closest('.token-span') && !e.target.closest('#token-popover')) {
+        if (!document.querySelector('.token-span.is-active-token')) {
+          hidePopover();
+        }
+      }
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.token-span') && !e.target.closest('#token-popover')) {
         hidePopover();
       }
     });
@@ -222,7 +284,7 @@
   }
 
   function renderPanels() {
-    panelsContainer.innerHTML = '';
+    panelsContainer.replaceChildren();
 
     panels.forEach((modelId, idx) => {
       if (!panelViews[idx]) {
@@ -237,13 +299,13 @@
       panel.innerHTML = `
         <div class="panel-header">
           <div class="model-select-wrapper">
-            <select class="model-select" data-panel-index="${idx}">
+            <select class="model-select" data-panel-index="${idx}" aria-label="Select comparison model">
               ${buildModelOptions(modelId)}
             </select>
             <span class="vocab-tag" id="vocab-tag-${idx}">--</span>
           </div>
           <div class="panel-actions">
-            ${panels.length > 1 ? `<button class="btn-icon remove-panel-btn" data-panel-index="${idx}" title="Remove panel">✕</button>` : ''}
+            ${panels.length > 1 ? `<button class="btn-icon remove-panel-btn" data-panel-index="${idx}" title="Remove panel" aria-label="Remove comparison panel">✕</button>` : ''}
           </div>
         </div>
 
@@ -462,23 +524,43 @@
           .replace(/ /g, '<span class="whitespace-char">·</span>')
           .replace(/\n/g, '<span class="whitespace-char">↵</span>\n');
 
-        html += `<span class="token-span ${colorClass} ${specialClass}" data-panel="${idx}" data-token-idx="${tIdx}">${displayText}</span>`;
+        html += `<span class="token-span ${colorClass} ${specialClass}" data-panel="${idx}" data-token-idx="${tIdx}" tabindex="0" role="button" aria-label="Token ${t.index + 1}: ${escapeHtml(t.text)}">${displayText}</span>`;
       });
       html += '</div>';
       bodyEl.innerHTML = html;
 
-      // Attach token hover listeners
+      // Attach token hover and tap/click listeners
       bodyEl.querySelectorAll('.token-span').forEach(span => {
         span.addEventListener('mouseenter', (e) => {
           const tIdx = parseInt(span.dataset.tokenIdx, 10);
           const token = data.tokens[tIdx];
-          showPopover(token, e.target);
+          showPopover(token, e.target, false);
+        });
+
+        span.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const tIdx = parseInt(span.dataset.tokenIdx, 10);
+          const token = data.tokens[tIdx];
+          if (span.classList.contains('is-active-token') && popover.style.display !== 'none') {
+            hidePopover();
+          } else {
+            showPopover(token, span, true);
+          }
+        });
+
+        span.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            span.click();
+          } else if (e.key === 'Escape') {
+            hidePopover();
+          }
         });
       });
 
     } else if (currentTab === 'table') {
       let html = `
-        <div class="token-table-wrapper">
+        <div class="token-table-wrapper" tabindex="0" role="region" aria-label="Token breakdown table">
           <table class="token-table">
             <thead>
               <tr>
@@ -514,8 +596,13 @@
     }
   }
 
-  function showPopover(token, targetElement) {
+  function showPopover(token, targetElement, isPinned = false) {
     if (!token || !targetElement) return;
+
+    document.querySelectorAll('.token-span.is-active-token').forEach(el => el.classList.remove('is-active-token'));
+    if (isPinned) {
+      targetElement.classList.add('is-active-token');
+    }
 
     popIndex.textContent = `#${token.index}`;
     popId.textContent = `ID: ${token.id}`;
@@ -525,20 +612,27 @@
     popSpan.textContent = `[${token.start}, ${token.end}]`;
 
     popover.style.display = 'flex';
+    popover.setAttribute('aria-hidden', 'false');
 
-    // Position popover relative to hovered token
+    // Position popover relative to hovered or clicked token
     const rect = targetElement.getBoundingClientRect();
     const popRect = popover.getBoundingClientRect();
+    const padding = 12;
 
     let top = rect.bottom + window.scrollY + 6;
     let left = rect.left + window.scrollX;
 
-    // Boundary detection
-    if (left + popRect.width > window.innerWidth - 16) {
-      left = window.innerWidth - popRect.width - 16;
+    // Viewport horizontal boundary clamping
+    if (left + popRect.width > window.innerWidth - padding) {
+      left = window.innerWidth - popRect.width - padding;
     }
-    if (top + popRect.height > window.innerHeight + window.scrollY - 16) {
-      top = rect.top + window.scrollY - popRect.height - 6;
+    if (left < padding) {
+      left = padding;
+    }
+
+    // Viewport vertical boundary clamping: place above if it overflows bottom
+    if (rect.bottom + popRect.height + padding > window.innerHeight) {
+      top = Math.max(padding + window.scrollY, rect.top + window.scrollY - popRect.height - 6);
     }
 
     popover.style.top = `${Math.max(8, top)}px`;
@@ -547,6 +641,8 @@
 
   function hidePopover() {
     popover.style.display = 'none';
+    popover.setAttribute('aria-hidden', 'true');
+    document.querySelectorAll('.token-span.is-active-token').forEach(el => el.classList.remove('is-active-token'));
   }
 
   function escapeHtml(str) {
